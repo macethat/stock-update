@@ -1,0 +1,26 @@
+# Archivos de inventario (cambian diario)
+ListaInvFisic.csv
+ListaInvFisic.xls
+ListaInvFisic.xlsx
+
+# Export de WooCommerce (se descarga via API)
+wc-product-export-*.csv
+
+# Carpetas de corridas diarias
+update_*/
+
+# Archivos temporales
+tmp_*.csv
+tmp_*.xls
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Lock files de office
+.~lock.*
+
+# Entorno virtual
+venv/
+.venv/
