@@ -1,6 +1,6 @@
 ---
 name: stock-update
-description: Actualiza el inventario de WooCommerce desde un CSV de inventario fisico. Descarga el export de productos de WooCommerce via API, lo cruza con ListaInvFisic.csv, actualiza stock y stock_status (outofstock si <=6), y verifica el resultado.
+description: Actualiza el inventario de WooCommerce desde un CSV de inventario fisico via SSH+WP-CLI. Cruza ListaInvFisic.csv con el export de WooCommerce, genera comparativa previa, actualiza stock y stock_status (outofstock si <=6), y verifica.
 ---
 
 ## Proceso diario de actualizacion de stock
@@ -17,17 +17,22 @@ python daily_stock_update.py --live   # actualizacion en vivo
 ```
 
 ### 3. Que hace el script
-1. Descarga el export de productos de WooCommerce via API REST
+1. Exporta todos los productos de WooCommerce via SSH + WP-CLI (PHP script en servidor)
 2. Crea una subcarpeta `update_DD-MM-YYYY/`
 3. Copia los archivos fuente a la carpeta del dia
-4. Cruza `Codigo` (inventario) con `SKU` (WooCommerce)
-5. Para cada producto coincidente:
+4. Genera `comparativa_previa.csv` con:
+   - stock y status actual (WC) vs inventario fisico
+   - diferencia de unidades
+   - nuevo status segun regla (outofstock si <= 6)
+   - columna "cambiara" (SI/no)
+5. Cruza `Codigo` (inventario) con `SKU` (WooCommerce)
+6. Para cada producto coincidente:
    - Actualiza `stock_quantity` al valor de `Cant.Total`
    - Si stock <= 6, establece `stock_status = "outofstock"`
    - Si stock > 6, establece `stock_status = "instock"`
-6. Productos solo en WooCommerce con stock <= 6 tambien se marcan outofstock
-7. En modo `--live`, aplica los cambios via API
-8. Verifica que los cambios se aplicaron correctamente
+7. Productos solo en WooCommerce con stock <= 6 tambien se marcan outofstock
+8. En modo `--live`, aplica los cambios via SSH (WP-CLI `wc product update` / `wc product_variation update`)
+9. Re-exporta y verifica que los cambios se aplicaron correctamente
 
 ### 4. Reglas de negocio
 - **Stock <= 6 unidades** → `outofstock` (aplica a todos los productos, incluso sin cambio de cantidad)
@@ -38,11 +43,16 @@ python daily_stock_update.py --live   # actualizacion en vivo
 ### 5. Archivos generados
 En la carpeta `update_DD-MM-YYYY/`:
 - `ListaInvFisic.csv` — copia del inventario original
-- `wc-product-export-*.csv` — export descargado de WooCommerce
-- `reporte_preview.csv` — detalle de cada producto actualizado
-- `verificacion.csv` — resultados de la verificacion post-actualizacion
+- `wc_export.json` — export de WooCommerce via WP-CLI
+- `comparativa_previa.csv` — comparacion pre-actualizacion (WC vs inventario)
+- `reporte_preview.csv` — detalle de cada producto a actualizar
+- `cambios.csv` — solo productos con cambio real (stock o status)
+- `reporte_actualizacion.csv` — resultado post-actualizacion (solo --live)
+- `verificacion.txt` — resultado de la verificacion (solo --live)
 
-### 6. API Credentials
-- URL: https://suplementospanama.net
-- Consumer Key y Consumer Secret configuradas en `daily_stock_update.py`
-- Permisos: Lectura/Escritura en WooCommerce REST API
+### 6. Conexion (SSH + WP-CLI)
+- Host: `ssh.suplementospanama.net:18765`
+- Usuario: `u1910-kbd9lgn9dh44`
+- Llave sin contraseña: `ssh-key-nopass`
+- WP-CLI version 2.12.0 en servidor
+- PHP script `~/wc_export_ssh.php` para exportar productos

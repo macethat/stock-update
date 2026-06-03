@@ -1,219 +1,47 @@
 import pandas as pd
-import urllib.request
 import json
-import base64
-import time
 import os
 import sys
+import subprocess
 import shutil
 from datetime import datetime
 
-# === CONFIGURACION ===
 CARPETA_BASE = os.path.dirname(os.path.abspath(__file__))
-WC_URL = "https://suplementospanama.net"
-CONSUMER_KEY = "ck_5fa7935bad5d098c833a7e3f022e6b4ab1a70e0e"
-CONSUMER_SECRET = "cs_3f5441046f1d1d064a9edbc8c04c5e4d69b2a4fa"
 STOCK_LIMIT = 6
-API_DELAY = 0.05
 
+SSH_KEY = os.path.join(CARPETA_BASE, "ssh-key-nopass")
+SSH_USER = "u1910-kbd9lgn9dh44"
+SSH_HOST = "ssh.suplementospanama.net"
+SSH_PORT = "18765"
+WP_PATH = "~/www/suplementospanama.net/public_html"
 
-def auth_header():
-    token = base64.b64encode(f"{CONSUMER_KEY}:{CONSUMER_SECRET}".encode()).decode()
-    return {
-        "Authorization": f"Basic {token}",
-        "Content-Type": "application/json",
-        "User-Agent": "Stock-Sync/1.0"
-    }
-
-
-def api_get(url):
-    req = urllib.request.Request(url, headers=auth_header())
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return json.loads(r.read().decode())
-    except Exception as e:
-        print(f"  ERROR API: {e}")
-        return []
-
-
-def api_put(url, data):
-    req = urllib.request.Request(
-        url, data=json.dumps(data).encode(),
-        headers=auth_header(), method="PUT"
+def ssh_run(cmd):
+    full = (
+        f'ssh -o StrictHostKeyChecking=no -i "{SSH_KEY}" -p {SSH_PORT} '
+        f'{SSH_USER}@{SSH_HOST} '
+        f'"export TERM=xterm-256color; {cmd}"'
     )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return r.status, json.loads(r.read().decode())
-    except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read().decode()) if e.read() else str(e)
-    except urllib.error.URLError as e:
-        return 0, {"message": str(e.reason)}
+    r = subprocess.run(full, shell=True, capture_output=True, timeout=120)
+    stdout = r.stdout.decode('utf-8', errors='replace').strip()
+    stderr = r.stderr.decode('utf-8', errors='replace').strip()
+    if r.returncode != 0 and stderr:
+        if not any(x in stderr for x in ['Warning:', 'Permanently added']):
+            print(f"  SSH WARN: {stderr[:200]}")
+    return stdout
 
-
-def descargar_export_wc():
-    print("Descargando productos desde WooCommerce...")
-    productos = []
-    page = 1
-    while True:
-        url = f"{WC_URL}/wp-json/wc/v3/products?per_page=100&page={page}"
-        data = api_get(url)
-        if not data:
-            break
-        for p in data:
-            productos.append({
-                "ID": p["id"],
-                "Tipo": p.get("type", ""),
-                "SKU": p.get("sku", ""),
-                "Nombre": p.get("name", ""),
-                "Inventario": p.get("stock_quantity", 0) if p.get("stock_quantity") is not None else 0,
-                "Publicado": 1 if p.get("status") == "publish" else 0,
-                "Precio normal": p.get("regular_price", ""),
-                "Superior": ""
-            })
-            if p.get("type") == "variable":
-                vurl = f"{WC_URL}/wp-json/wc/v3/products/{p['id']}/variations?per_page=100"
-                for v in api_get(vurl):
-                    productos.append({
-                        "ID": v["id"],
-                        "Tipo": "variation",
-                        "SKU": v.get("sku", ""),
-                        "Nombre": v.get("name", ""),
-                        "Inventario": v.get("stock_quantity", 0) if v.get("stock_quantity") is not None else 0,
-                        "Publicado": 1 if v.get("status") == "publish" else 0,
-                        "Precio normal": v.get("regular_price", ""),
-                        "Superior": f"id:{p['id']}"
-                    })
-        print(f"  Pagina {page}: {len(data)} productos")
-        page += 1
-        time.sleep(0.3)
-
-    fecha = datetime.now().strftime("%d-%m-%Y")
-    nombre = f"wc-product-export-{fecha}-{int(time.time())}.csv"
-    ruta = os.path.join(CARPETA_BASE, "tmp_wc_export.csv")
-    df = pd.DataFrame(productos)
-    df.to_csv(ruta, index=False)
-    print(f"  Export descargado: {len(productos)} productos")
-    return ruta
-
-
-def crear_carpeta_dia():
-    fecha = datetime.now().strftime("%d-%m-%Y")
-    carpeta = os.path.join(CARPETA_BASE, f"update_{fecha}")
-    os.makedirs(carpeta, exist_ok=True)
-    print(f"Carpeta creada: {carpeta}")
-    return carpeta
-
-
-def procesar(inv_csv, wc_csv, carpeta, dry_run=True):
-    with open(inv_csv, "r", encoding="ISO-8859-1") as f:
-        delim = ";" if ";" in f.readline() else ","
-
-    df_inv = pd.read_csv(inv_csv, delimiter=delim, encoding="ISO-8859-1", dtype={"Codigo": str})
-    df_wc = pd.read_csv(wc_csv, dtype={"SKU": str, "Superior": str})
-
-    df_inv["Codigo"] = df_inv["Codigo"].str.strip()
-    df_wc["SKU"] = df_wc["SKU"].str.strip()
-    df_wc["Inventario"] = pd.to_numeric(df_wc["Inventario"], errors="coerce").fillna(0).astype(int)
-    if "Superior" in df_wc.columns:
-        df_wc["Superior"] = df_wc["Superior"].astype(str).str.replace("id:", "", regex=False)
-        df_wc["Superior"] = pd.to_numeric(df_wc["Superior"], errors="coerce").fillna(0).astype(int)
-    else:
-        df_wc["Superior"] = 0
-
-    cod_inv = set(df_inv["Codigo"].dropna().unique())
-    sku_wc = set(df_wc["SKU"].dropna().unique())
-    sku_wc = {s for s in sku_wc if s not in ("", "nan")}
-    coinciden = cod_inv & sku_wc
-
-    wc_sku = df_wc[df_wc["SKU"].notna() & ~df_wc["SKU"].isin(["", "nan"])].copy()
-    updates = []
-    for _, wc in wc_sku.iterrows():
-        sku = wc["SKU"]
-        if sku in coinciden:
-            inv = df_inv[df_inv["Codigo"] == sku].iloc[0]
-            ns = int(inv["Cant.Total"])
-            updates.append({
-                "id": int(wc["ID"]), "parent_id": int(wc["Superior"]),
-                "tipo": wc.get("Tipo", "simple"), "sku": sku,
-                "nombre": inv.get("Nombre", wc.get("Nombre", "")),
-                "old_stock": int(wc["Inventario"]), "new_stock": ns,
-                "new_status": "outofstock" if ns <= STOCK_LIMIT else "instock",
-                "motivo": "inventario"
-            })
-        elif sku in (sku_wc - cod_inv):
-            cs = int(wc["Inventario"])
-            if cs <= STOCK_LIMIT:
-                updates.append({
-                    "id": int(wc["ID"]), "parent_id": int(wc["Superior"]),
-                    "tipo": wc.get("Tipo", "simple"), "sku": sku,
-                    "nombre": wc.get("Nombre", ""),
-                    "old_stock": cs, "new_stock": cs,
-                    "new_status": "outofstock", "motivo": "solo_wc_sin_stock"
-                })
-
-    # Reporte previo (que se va a hacer)
-    reporte_df = pd.DataFrame(updates)
-    reporte_df.to_csv(os.path.join(carpeta, "reporte_preview.csv"), index=False)
-
-    ok = fail = skip = 0
-    print(f"\n{'='*70}")
-    print(f"  {'SIMULACION' if dry_run else 'ACTUALIZACION EN VIVO'}")
-    print(f"  Total: {len(updates)} productos")
-    print(f"{'='*70}")
-
-    for i, u in enumerate(updates, 1):
-        ep = f"products/{u['parent_id']}/variations/{u['id']}" if u["tipo"] == "variation" else f"products/{u['id']}"
-        url = f"{WC_URL}/wp-json/wc/v3/{ep}"
-        payload = {"stock_quantity": u["new_stock"], "stock_status": u["new_status"], "manage_stock": True}
-        diff = u["new_stock"] - u["old_stock"]
-        signo = "+" if diff > 0 else ""
-        print(f"  [{i}/{len(updates)}] {u['tipo']:<9} ID:{u['id']:<6} SKU:{u['sku']:<15} {u['old_stock']:>4}->{u['new_stock']:>4} ({signo}{diff}) {u['new_status']:<10} [{u['motivo']}]")
-
-        if not dry_run:
-            needs = (diff != 0) or (u["new_stock"] <= STOCK_LIMIT)
-            if not needs:
-                skip += 1; print("    -> SIN CAMBIOS")
-            else:
-                st, resp = api_put(url, payload)
-                if st == 200:
-                    ok += 1; print("    -> OK")
-                else:
-                    fail += 1
-                    msg = resp.get("message", str(resp))[:120] if isinstance(resp, dict) else str(resp)
-                    print(f"    -> ERROR {st}: {msg}")
-                time.sleep(API_DELAY)
-
-    print(f"\n{'='*70}")
-    if dry_run:
-        cambios = sum(1 for u in updates if u["new_stock"] != u["old_stock"])
-        print(f"  Con cambio stock: {cambios}  Solo status: {len(updates)-cambios}")
-    else:
-        print(f"  OK: {ok}  Fallidos: {fail}  Omitidos: {skip}")
-    print(f"{'='*70}")
-    return updates, ok, fail, skip
-
-
-def verificar(carpeta, wc_csv, inv_csv):
-    print("\n--- VERIFICACION ---")
-    with open(inv_csv, "r", encoding="ISO-8859-1") as f:
-        delim = ";" if ";" in f.readline() else ","
-    df_inv = pd.read_csv(inv_csv, delimiter=delim, encoding="ISO-8859-1", dtype={"Codigo": str})
-    df_inv["Codigo"] = df_inv["Codigo"].str.strip()
-    df_wc = pd.read_csv(wc_csv, dtype={"SKU": str})
-    df_wc["SKU"] = df_wc["SKU"].str.strip()
-    df_wc["Inventario"] = pd.to_numeric(df_wc["Inventario"], errors="coerce").fillna(0).astype(int)
-
-    m = df_inv.merge(df_wc, left_on="Codigo", right_on="SKU", how="inner", suffixes=("_i", "_w"))
-    ok = (m["Cant.Total"] == m["Inventario"]).sum()
-    bad = (~(m["Cant.Total"] == m["Inventario"])).sum()
-    m.to_csv(os.path.join(carpeta, "verificacion.csv"), index=False)
-    print(f"  Coinciden: {len(m)}  OK: {ok}  Discrepancias: {bad}")
-    return bad == 0
-
+def get_wc_export_via_ssh(suffix=""):
+    print("Exportando productos via SSH/WP-CLI...")
+    out = ssh_run(
+        f'cd {WP_PATH} && wp --user=Suplementos eval-file ~/wc_export_ssh.php 2>/dev/null'
+    )
+    local = os.path.join(CARPETA_BASE, f"tmp_wc_export{suffix}.json")
+    with open(local, 'w', encoding='utf-8') as f:
+        f.write(out)
+    print(f"  Exportados: {len(json.loads(out))} productos")
+    return local
 
 def main():
     dry_run = "--live" not in sys.argv
-
     print("=== ACTUALIZACION DIARIA DE STOCK ===")
     print(f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n")
 
@@ -223,30 +51,210 @@ def main():
         print("Coloca el archivo ListaInvFisic.csv en la carpeta del proyecto.")
         return
 
-    wc_export = descargar_export_wc()
-    carpeta = crear_carpeta_dia()
-
+    carpeta = os.path.join(CARPETA_BASE, f"update_{datetime.now().strftime('%d-%m-%Y')}")
+    os.makedirs(carpeta, exist_ok=True)
     shutil.copy2(inv_csv, os.path.join(carpeta, "ListaInvFisic.csv"))
-    wc_dest = os.path.join(carpeta, os.path.basename(wc_export))
-    shutil.copy2(wc_export, wc_dest)
-    os.remove(wc_export)
 
-    updates, ok, fail, skip = procesar(inv_csv, wc_dest, carpeta, dry_run=dry_run)
+    wc_json = get_wc_export_via_ssh(suffix="_1")
+    wc_path = os.path.join(carpeta, "wc_export.json")
+    shutil.copy2(wc_json, wc_path)
 
-    if not dry_run:
-        # Reporte post-actualizacion
+    with open(wc_json, encoding='utf-8') as f:
+        wc_products = json.load(f)
+
+    with open(inv_csv, "r", encoding="ISO-8859-1") as f:
+        delim = ";" if ";" in f.readline() else ","
+    df_inv = pd.read_csv(inv_csv, delimiter=delim, encoding="ISO-8859-1", dtype={"Codigo": str})
+    df_inv["Codigo"] = df_inv["Codigo"].str.strip()
+
+    wc_by_sku = {}
+    for p in wc_products:
+        sku = p["sku"].strip() if p["sku"] else ""
+        if sku:
+            wc_by_sku[sku] = p
+
+    cod_inv = set(df_inv["Codigo"].dropna().unique())
+    sku_wc = set(wc_by_sku.keys())
+    coinciden = cod_inv & sku_wc
+
+    # === COMPARATIVA PREVIA ===
+    rows_comp = []
+    for sku in coinciden:
+        wc_p = wc_by_sku[sku]
+        inv_row = df_inv[df_inv["Codigo"] == sku].iloc[0]
+        old_s = wc_p["stock_qty"] if wc_p["stock_qty"] is not None else 0
+        try:
+            ns = int(inv_row["Cant.Total"])
+        except:
+            continue
+        ns_status = "outofstock" if ns <= STOCK_LIMIT else "instock"
+        diff = ns - old_s
+        rows_comp.append({
+            "sku": sku, "nombre": inv_row.get("Nombre", wc_p.get("name", "")),
+            "tipo": wc_p["type"], "wc_stock": old_s, "wc_status": wc_p["stock_st"],
+            "inv_stock": ns, "nuevo_status": ns_status, "diferencia": diff,
+            "cambiara": "SI" if (diff != 0 or wc_p["stock_st"] != ns_status) else "no"
+        })
+    for sku in (sku_wc - cod_inv):
+        wc_p = wc_by_sku[sku]
+        old_s = wc_p["stock_qty"] if wc_p["stock_qty"] is not None else 0
+        if old_s <= STOCK_LIMIT:
+            rows_comp.append({
+                "sku": sku, "nombre": wc_p.get("name", ""),
+                "tipo": wc_p["type"], "wc_stock": old_s, "wc_status": wc_p["stock_st"],
+                "inv_stock": "(solo WC)", "nuevo_status": "outofstock", "diferencia": "-",
+                "cambiara": "SI"
+            })
+    comp_df = pd.DataFrame(rows_comp)
+    comp_df.to_csv(os.path.join(carpeta, "comparativa_previa.csv"), index=False)
+    cambiaran = sum(1 for r in rows_comp if r["cambiara"] == "SI")
+    print(f"  Comparativa previa: {len(rows_comp)} productos ({cambiaran} cambiaran)")
+
+    updates = []
+    for sku in coinciden:
+        wc_p = wc_by_sku[sku]
+        inv_row = df_inv[df_inv["Codigo"] == sku].iloc[0]
+        old_stock = wc_p["stock_qty"] if wc_p["stock_qty"] is not None else 0
+        try:
+            ns = int(inv_row["Cant.Total"])
+        except:
+            continue
+        updates.append({
+            "id": wc_p["id"], "parent": wc_p["parent"],
+            "tipo": wc_p["type"], "sku": sku,
+            "nombre": inv_row.get("Nombre", wc_p.get("name", "")),
+            "old_stock": old_stock, "new_stock": ns,
+            "new_status": "outofstock" if ns <= STOCK_LIMIT else "instock",
+            "old_status": wc_p["stock_st"],
+            "manage": wc_p["manage"],
+        })
+
+    for sku in (sku_wc - cod_inv):
+        wc_p = wc_by_sku[sku]
+        cs = wc_p["stock_qty"] if wc_p["stock_qty"] is not None else 0
+        if cs <= STOCK_LIMIT:
+            updates.append({
+                "id": wc_p["id"], "parent": wc_p["parent"],
+                "tipo": wc_p["type"], "sku": sku,
+                "nombre": wc_p.get("name", ""),
+                "old_stock": cs, "new_stock": cs,
+                "new_status": "outofstock",
+                "old_status": wc_p["stock_st"],
+                "manage": wc_p["manage"],
+            })
+
+    df_prev = pd.DataFrame(updates)
+    df_prev.to_csv(os.path.join(carpeta, "reporte_preview.csv"), index=False)
+    print(f"\n{'='*70}")
+    print(f"  {'SIMULACION' if dry_run else 'ACTUALIZACION EN VIVO (SSH)'}")
+    print(f"  Total a procesar: {len(updates)} productos")
+    print(f"  Coincidencias: {len(coinciden)} | Solo WC (low stock): {len(updates)-len(coinciden)}")
+    print(f"{'='*70}")
+
+    commands = []
+    for u in updates:
+        diff = u["new_stock"] - u["old_stock"]
+        signo = "+" if diff > 0 else ""
+        needs_update = (diff != 0) or (u["new_status"] != u["old_status"])
+
+        print(f"  {u['tipo']:<9} ID:{u['id']:<6} SKU:{u['sku']:<15} "
+              f"{u['old_stock']:>4}->{u['new_stock']:>4} ({signo}{diff}) "
+              f"{u['new_status']:<10}", end="")
+
+        if not needs_update:
+            print(" -> SIN CAMBIOS")
+            continue
+
+        in_stock = "true" if u["new_status"] == "instock" else "false"
+        if u["tipo"] == "variation":
+            wp_cmd = f"wp --user=Suplementos wc product_variation update {u['parent']} {u['id']}"
+        else:
+            wp_cmd = f"wp --user=Suplementos wc product update {u['id']}"
+        wp_cmd += f" --stock_quantity={u['new_stock']} --in_stock={in_stock}"
+        if not u["manage"] or u["manage"] == "parent":
+            wp_cmd += " --manage_stock=true"
+        commands.append(f"cd {WP_PATH} && {wp_cmd}")
+
+        if dry_run:
+            print(f" -> {'outofstock' if u['new_stock'] <= STOCK_LIMIT else 'instock'} (dry)")
+        else:
+            print(" -> pendiente")
+
+    # CSV de cambios (solo productos con modificacion real)
+    cambios_df = pd.DataFrame([u for u in updates if u["new_stock"] != u["old_stock"] or u["new_status"] != u["old_status"]])
+    if not cambios_df.empty:
+        cambios_df["tipo_cambio"] = cambios_df.apply(
+            lambda r: "solo_status" if r["new_stock"] == r["old_stock"] else "stock+/-", axis=1)
+        cambios_df.to_csv(os.path.join(carpeta, "cambios.csv"), index=False)
+        cambios_stock = cambios_df[cambios_df["new_stock"] != cambios_df["old_stock"]]
+        if not cambios_stock.empty:
+            cambios_stock.to_csv(os.path.join(carpeta, "cambios_stock.csv"), index=False)
+            print(f"  Cambios reales guardados: {len(cambios_df)} en cambios.csv ({len(cambios_stock)} con cambio de stock en cambios_stock.csv)")
+
+    if dry_run:
+        cambios = sum(1 for u in updates if u["new_stock"] != u["old_stock"])
+        print(f"\n  Con cambio stock: {cambios}  Solo status: {len(updates)-cambios}")
+        print(f"  Comandos WP-CLI generados: {len(commands)}")
+    else:
+        print(f"\n  Ejecutando {len(commands)} comandos vía SSH...")
+        ok = fail = 0
+        batch_size = 20
+        for b in range(0, len(commands), batch_size):
+            batch = commands[b:b+batch_size]
+            batch_cmd = "; ".join(batch)
+            out = ssh_run(batch_cmd)
+            for i, cmd in enumerate(batch, b+1):
+                sys.stdout.write(f"\r  [{i}/{len(commands)}] ")
+                sys.stdout.flush()
+            succ = out.count("Success:")
+            errs = out.count("Error:")
+            ok += succ
+            fail += errs
+            sys.stdout.write(f"  OK: +{succ}  Err: +{errs}\n")
+            sys.stdout.flush()
+
+        print(f"\n  OK: {ok}  Fallidos: {fail}")
+
+        print("\n--- VERIFICACION ---", flush=True)
+        wc_json2 = get_wc_export_via_ssh(suffix="_2")
+        with open(wc_json2, encoding='utf-8') as f:
+            wc2 = json.load(f)
+        wc2_by_sku = {}
+        for p in wc2:
+            sku = p["sku"].strip() if p["sku"] else ""
+            if sku:
+                wc2_by_sku[sku] = p
+
+        disc = 0
+        for u in updates:
+            wc2_p = wc2_by_sku.get(u["sku"])
+            if not wc2_p:
+                continue
+            actual = wc2_p["stock_qty"] if wc2_p["stock_qty"] is not None else 0
+            if actual != u["new_stock"]:
+                disc += 1
+                print(f"  DISCREPANCIA: {u['sku']} esperado={u['new_stock']} actual={actual}")
+
+        if disc == 0:
+            print("  Todas las actualizaciones verificadas correctamente.")
+        else:
+            print(f"  {disc} discrepancias encontradas.")
+
         df_result = pd.DataFrame(updates)
         df_result["aplicado"] = df_result.apply(
             lambda r: "si" if (r["new_stock"] != r["old_stock"] or r["new_stock"] <= STOCK_LIMIT) else "no_omitido",
             axis=1
         )
         df_result.to_csv(os.path.join(carpeta, "reporte_actualizacion.csv"), index=False)
-        verificar(carpeta, wc_dest, inv_csv)
+        with open(os.path.join(carpeta, "verificacion.txt"), "w") as f:
+            f.write(f"Discrepancias: {disc}\n")
+            f.write(f"OK: {ok}  Fallidos: {fail}\n")
+        os.remove(wc_json2)
 
+    os.remove(wc_json)
     print(f"\nArchivos en: {carpeta}")
-    for f in os.listdir(carpeta):
+    for f in sorted(os.listdir(carpeta)):
         print(f"  - {f}")
-
 
 if __name__ == "__main__":
     main()

@@ -24,3 +24,17 @@ __pycache__/
 # Entorno virtual
 venv/
 .venv/
+
+# SSH keys
+ssh-key-nopass
+ssh-key-nopass.pub
+
+# Archivos de analisis/experimentos
+analisis*.py
+analisis*.xls
+analisis*.csv
+resumen_completo.csv
+solo_en_*.csv
+solo_en_*.xls
+actualizacion_stock.csv
+Nuevo documento de texto.txt
