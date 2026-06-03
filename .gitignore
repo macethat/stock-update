@@ -28,6 +28,8 @@ venv/
 # SSH keys
 ssh-key-nopass
 ssh-key-nopass.pub
+github-key-nopass
+github-key-nopass.pub
 
 # Archivos de analisis/experimentos
 analisis*.py
