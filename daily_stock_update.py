@@ -42,6 +42,12 @@ def get_wc_export_via_ssh(suffix=""):
 
 def main():
     dry_run = "--live" not in sys.argv
+    fecha_arg = None
+    for i, a in enumerate(sys.argv):
+        if a == "--fecha" and i+1 < len(sys.argv):
+            fecha_arg = sys.argv[i+1]
+            sys.argv.pop(i+1); sys.argv.pop(i)
+            break
     print("=== ACTUALIZACION DIARIA DE STOCK ===")
     print(f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n")
 
@@ -51,7 +57,11 @@ def main():
         print("Coloca el archivo ListaInvFisic.csv en la carpeta del proyecto.")
         return
 
-    carpeta = os.path.join(CARPETA_BASE, f"update_{datetime.now().strftime('%d-%m-%Y')}")
+    if fecha_arg:
+        fec = datetime.strptime(fecha_arg, "%d-%m-%Y")
+    else:
+        fec = datetime.fromtimestamp(os.path.getmtime(inv_csv))
+    carpeta = os.path.join(CARPETA_BASE, f"update_{fec.strftime('%d-%m-%Y')}")
     os.makedirs(carpeta, exist_ok=True)
     shutil.copy2(inv_csv, os.path.join(carpeta, "ListaInvFisic.csv"))
 
