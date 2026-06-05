@@ -15,6 +15,10 @@ SSH_HOST = "ssh.suplementospanama.net"
 SSH_PORT = "18765"
 WP_PATH = "~/www/suplementospanama.net/public_html"
 
+PSK_PIN = "46558"
+PSK_API_KEY = "BQxQrt5/FwARtlVUwT0GFw=="
+PSK_API_HOST = "adm.premium-soft.com"
+
 def ssh_run(cmd):
     full = (
         f'ssh -o StrictHostKeyChecking=no -i "{SSH_KEY}" -p {SSH_PORT} '
@@ -40,30 +44,72 @@ def get_wc_export_via_ssh(suffix=""):
     print(f"  Exportados: {len(json.loads(out))} productos")
     return local
 
+def fetch_from_psk_api(suffix=""):
+    import http.client
+    print("Extrayendo inventario desde PSK Cloud API...")
+    conn = http.client.HTTPSConnection(PSK_API_HOST)
+    conn.request('GET', f'/Api/Articulos?pin={PSK_PIN}&pagina=0&cant_pagina=99999',
+                 headers={'clave-api-business': PSK_API_KEY})
+    r = conn.getresponse()
+    if r.status != 200:
+        print(f"ERROR: API respondio con status {r.status}")
+        sys.exit(1)
+    data = json.loads(r.read().decode())
+    if not isinstance(data, list):
+        print(f"ERROR: Respuesta inesperada de API: {data}")
+        sys.exit(1)
+    rows = []
+    for a in data:
+        cod = a.get('codigo', '')
+        nom = a.get('nombre', '')
+        ext = a.get('existencias', '0')
+        rows.append({"Codigo": cod, "Nombre": nom, "Cant.Total": ext})
+    df = pd.DataFrame(rows)
+    df["Codigo"] = df["Codigo"].str.strip()
+    print(f"  Extraidos {len(df)} articulos desde PSK Cloud API")
+    return df
+
 def main():
     dry_run = "--live" not in sys.argv
+    use_api = "--api" in sys.argv
     fecha_arg = None
     for i, a in enumerate(sys.argv):
         if a == "--fecha" and i+1 < len(sys.argv):
             fecha_arg = sys.argv[i+1]
             sys.argv.pop(i+1); sys.argv.pop(i)
             break
+    if use_api:
+        for i, a in enumerate(sys.argv):
+            if a == "--api":
+                sys.argv.pop(i)
+                break
     print("=== ACTUALIZACION DIARIA DE STOCK ===")
     print(f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n")
 
     inv_csv = os.path.join(CARPETA_BASE, "ListaInvFisic.csv")
-    if not os.path.exists(inv_csv):
-        print(f"ERROR: No se encuentra {inv_csv}")
-        print("Coloca el archivo ListaInvFisic.csv en la carpeta del proyecto.")
-        return
 
-    if fecha_arg:
-        fec = datetime.strptime(fecha_arg, "%d-%m-%Y")
+    if use_api:
+        fec = datetime.strptime(fecha_arg, "%d-%m-%Y") if fecha_arg else datetime.now()
+        carpeta = os.path.join(CARPETA_BASE, f"update_{fec.strftime('%d-%m-%Y')}")
+        os.makedirs(carpeta, exist_ok=True)
+        df_inv = fetch_from_psk_api()
+        df_inv.to_csv(os.path.join(carpeta, "ListaInvFisic.csv"), index=False)
     else:
-        fec = datetime.fromtimestamp(os.path.getmtime(inv_csv))
-    carpeta = os.path.join(CARPETA_BASE, f"update_{fec.strftime('%d-%m-%Y')}")
-    os.makedirs(carpeta, exist_ok=True)
-    shutil.copy2(inv_csv, os.path.join(carpeta, "ListaInvFisic.csv"))
+        if not os.path.exists(inv_csv):
+            print(f"ERROR: No se encuentra {inv_csv}")
+            print("Coloca el archivo ListaInvFisic.csv en la carpeta del proyecto.")
+            return
+        if fecha_arg:
+            fec = datetime.strptime(fecha_arg, "%d-%m-%Y")
+        else:
+            fec = datetime.fromtimestamp(os.path.getmtime(inv_csv))
+        carpeta = os.path.join(CARPETA_BASE, f"update_{fec.strftime('%d-%m-%Y')}")
+        os.makedirs(carpeta, exist_ok=True)
+        shutil.copy2(inv_csv, os.path.join(carpeta, "ListaInvFisic.csv"))
+        with open(inv_csv, "r", encoding="ISO-8859-1") as f:
+            delim = ";" if ";" in f.readline() else ","
+        df_inv = pd.read_csv(inv_csv, delimiter=delim, encoding="ISO-8859-1", dtype={"Codigo": str})
+        df_inv["Codigo"] = df_inv["Codigo"].str.strip()
 
     wc_json = get_wc_export_via_ssh(suffix="_1")
     wc_path = os.path.join(carpeta, "wc_export.json")
@@ -71,11 +117,6 @@ def main():
 
     with open(wc_json, encoding='utf-8') as f:
         wc_products = json.load(f)
-
-    with open(inv_csv, "r", encoding="ISO-8859-1") as f:
-        delim = ";" if ";" in f.readline() else ","
-    df_inv = pd.read_csv(inv_csv, delimiter=delim, encoding="ISO-8859-1", dtype={"Codigo": str})
-    df_inv["Codigo"] = df_inv["Codigo"].str.strip()
 
     wc_by_sku = {}
     for p in wc_products:
