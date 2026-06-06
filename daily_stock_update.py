@@ -63,6 +63,10 @@ def fetch_from_psk_api(suffix=""):
         cod = a.get('codigo', '')
         nom = a.get('nombre', '')
         ext = a.get('existencias', '0')
+        try:
+            ext = int(float(ext))
+        except:
+            ext = 0
         rows.append({"Codigo": cod, "Nombre": nom, "Cant.Total": ext})
     df = pd.DataFrame(rows)
     df["Codigo"] = df["Codigo"].str.strip()
@@ -292,10 +296,11 @@ def main():
             print(f"  {disc} discrepancias encontradas.")
 
         df_result = pd.DataFrame(updates)
-        df_result["aplicado"] = df_result.apply(
-            lambda r: "si" if (r["new_stock"] != r["old_stock"] or r["new_stock"] <= STOCK_LIMIT) else "no_omitido",
-            axis=1
-        )
+        if not df_result.empty:
+            df_result["aplicado"] = df_result.apply(
+                lambda r: "si" if (r["new_stock"] != r["old_stock"] or r["new_stock"] <= STOCK_LIMIT) else "no_omitido",
+                axis=1
+            )
         df_result.to_csv(os.path.join(carpeta, "reporte_actualizacion.csv"), index=False)
         with open(os.path.join(carpeta, "verificacion.txt"), "w") as f:
             f.write(f"Discrepancias: {disc}\n")
