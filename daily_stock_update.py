@@ -312,5 +312,23 @@ def main():
     for f in sorted(os.listdir(carpeta)):
         print(f"  - {f}")
 
+    if not dry_run:
+        git_commit_and_push(carpeta, ok, fail, disc)
+
+def git_commit_and_push(carpeta, ok, fail, disc):
+    git_key = os.path.join(CARPETA_BASE, "github-key-nopass")
+    msg = f"update {os.path.basename(carpeta).replace('update_', '')}: {ok} OK, {fail} fail, {disc} disc"
+    repo_dir = CARPETA_BASE
+    env = os.environ.copy()
+    env["GIT_SSH_COMMAND"] = f'ssh -i "{git_key}" -o StrictHostKeyChecking=no'
+    try:
+        subprocess.run(["git", "add", carpeta], cwd=repo_dir, capture_output=True, env=env)
+        subprocess.run(["git", "commit", "-m", msg], cwd=repo_dir, capture_output=True, env=env)
+        r = subprocess.run(["git", "push", "origin", "master"], cwd=repo_dir, capture_output=True, timeout=30, env=env)
+        out = r.stdout.decode() + r.stderr.decode()
+        print(f"  GitHub: {out.splitlines()[-1] if out.splitlines() else 'ok'}")
+    except Exception as e:
+        print(f"  GitHub WARN: {e}")
+
 if __name__ == "__main__":
     main()
