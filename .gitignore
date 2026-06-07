@@ -6,9 +6,6 @@ ListaInvFisic.xlsx
 # Export de WooCommerce (se descarga via API)
 wc-product-export-*.csv
 
-# Carpetas de corridas diarias
-update_*/
-
 # Archivos temporales
 tmp_*.csv
 tmp_*.xls
