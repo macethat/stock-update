@@ -1,0 +1,4 @@
+id,parent,tipo,sku,nombre,old_stock,new_stock,new_status,old_status,manage,tipo_cambio
+19074,19071,variation,748927066586,PROTEIN SHAKER VAINILLA 325 ML OPTIMUN NUTRICION,467,465,instock,instock,True,stock+/-
+19782,19778,variation,859400007559,ISOFIT VAINILLA ICE CREAM 2 LBS. NUTREX,14,13,instock,instock,True,stock+/-
+20467,20464,variation,842595131291,C4 PERFORMANCE 16OZ HAWAIIAN PINEAPLE,3101,3099,instock,instock,True,stock+/-
