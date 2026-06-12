@@ -1,0 +1,52 @@
+{
+   "operti":{
+      "id_operti":"",
+      "registrar_contabilidad":"0",
+      "id_operti_devol":"",
+      "id_tipo_documento":"2",
+      "fecha_emision":"2026-06-09",
+      "hora_emision":"15:00",
+      "id_almacen":"9",
+      "id_cliente":"2208",
+      "nombre_cliente":"RAUL MONTILLA",
+      "id_vendedor":"25",
+      "id_agencia":"6",
+      "id_usuario":"143",
+      "notas":"Prueba integracion WooCommerce",
+      "notas_internas":null,
+      "id_mesa":null,
+      "retenciones":[],
+      "id_tipo_recargo":null,
+      "prc_recargo":null,
+      "monto_recargo":null,
+      "motivo_recargo":null,
+      "id_tipo_recargo_propina":null,
+      "prc_recargo_propina":null,
+      "monto_recargo_propina":null,
+      "motivo_recargo_propina":null,
+      "fechaVence":null
+   },
+   "opermv":[
+      {
+         "id_articulo":"1175",
+         "nombre_articulo":"ACTIVE TIME RELEASED SPORT (MHP)",
+         "precio_unitario":"25.00",
+         "monto_descuento":"0",
+         "prc_descuento":"0",
+         "cantidad":"1.0",
+         "impuestos":[
+            {
+               "id_tipo_impuesto":"59",
+               "prc_impuesto":"7.0000000",
+               "monto_impuesto":"0.0000000"
+            }
+         ],
+         "id_unidad":"79",
+         "seriales":null,
+         "id_lote_vencimiento":null,
+         "notas":"",
+         "mostrado_en_comanda":0.0,
+         "integrados":null
+      }
+   ]
+}

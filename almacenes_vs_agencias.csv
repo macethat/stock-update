@@ -1,0 +1,24 @@
+Tipo,ID,Codigo,Nombre,Estatus
+,,,,
+ALMACENES,,,,
+Tipo,ID,Codigo,Nombre,Estatus
+Almacen,12,10,BODEGA ATRIO,Activo
+Almacen,11,9,BODEGA MEGAPOLIS,Activo
+Almacen,10,8,SP METROMALL,Activo
+Almacen,9,7,SP BODEGA,Activo
+Almacen,8,6,POWER CLUB ALTOS DE PANAMA,Activo
+Almacen,7,5,POWER CLUB SAN FRANCISCO,Activo
+Almacen,6,4,SP ATRIO COSTA DEL ESTE,Activo
+Almacen,5,3,SP MEGAPOLIS,Activo
+Almacen,2,2,SP BODEGA VIEJA,Inactivo
+Almacen,1,1,SP CANGREJO,Activo
+,,,,
+AGENCIAS,,,,
+Tipo,ID,Codigo,Nombre,Estatus
+Agencia,7,7,SP METROMALL,Activo
+Agencia,6,6,SP BODEGA,Activo
+Agencia,5,5,SP SUCURSAL POWER CLUB SAN FRANCISCO,Activo
+Agencia,4,4,SP SUCURSAL POWER CLUB ALTOS DE PANAMA,Activo
+Agencia,3,3,SP SUCURSAL 2 ATRIO MALL,Activo
+Agencia,2,2,SP SUCURSAL 1 MEGAPOLIS,Activo
+Agencia,1,1,SP CASA MATRIZ SUCURSAL CANGREJO,Activo

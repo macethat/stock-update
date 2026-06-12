@@ -1,10 +1,6 @@
-import os
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-
 import pandas as pd
 import json
+import os
 import sys
 import subprocess
 import shutil
@@ -12,28 +8,43 @@ from datetime import datetime
 
 CARPETA_BASE = os.path.dirname(os.path.abspath(__file__))
 STOCK_LIMIT = 6
-WP_DIR = os.path.expanduser("~/www/suplementospanama.net/public_html")
-EXPORT_PHP = os.path.expanduser("~/wc_export_ssh.php")
+
+SSH_KEY = os.path.join(CARPETA_BASE, "ssh-key-nopass")
+SSH_USER = "u1910-kbd9lgn9dh44"
+SSH_HOST = "ssh.suplementospanama.net"
+SSH_PORT = "18765"
+WP_PATH = "~/www/suplementospanama.net/public_html"
 
 PSK_PIN = "46558"
 PSK_API_KEY = "BQxQrt5/FwARtlVUwT0GFw=="
 PSK_API_HOST = "adm.premium-soft.com"
 
-def run_wp(cmd, timeout=60):
-    full = f"wp --user=Suplementos {cmd}"
-    r = subprocess.run(full, shell=True, capture_output=True, timeout=timeout, cwd=WP_DIR)
-    return r.stdout.decode('utf-8', errors='replace').strip()
+def ssh_run(cmd):
+    full = (
+        f'ssh -o StrictHostKeyChecking=no -i "{SSH_KEY}" -p {SSH_PORT} '
+        f'{SSH_USER}@{SSH_HOST} '
+        f'"export TERM=xterm-256color; {cmd}"'
+    )
+    r = subprocess.run(full, shell=True, capture_output=True, timeout=120)
+    stdout = r.stdout.decode('utf-8', errors='replace').strip()
+    stderr = r.stderr.decode('utf-8', errors='replace').strip()
+    if r.returncode != 0 and stderr:
+        if not any(x in stderr for x in ['Warning:', 'Permanently added']):
+            print(f"  SSH WARN: {stderr[:200]}")
+    return stdout
 
-def get_wc_export(suffix=""):
-    print("Exportando productos localmente...")
-    out = run_wp(f'eval-file {EXPORT_PHP} 2>/dev/null')
+def get_wc_export_via_ssh(suffix=""):
+    print("Exportando productos via SSH/WP-CLI...")
+    out = ssh_run(
+        f'cd {WP_PATH} && wp --user=Suplementos eval-file ~/wc_export_ssh.php 2>/dev/null'
+    )
     local = os.path.join(CARPETA_BASE, f"tmp_wc_export{suffix}.json")
     with open(local, 'w', encoding='utf-8') as f:
         f.write(out)
     print(f"  Exportados: {len(json.loads(out))} productos")
     return local
 
-def fetch_from_psk_api():
+def fetch_from_psk_api(suffix=""):
     import http.client
     print("Extrayendo inventario desde PSK Cloud API...")
     conn = http.client.HTTPSConnection(PSK_API_HOST)
@@ -62,41 +73,49 @@ def fetch_from_psk_api():
     print(f"  Extraidos {len(df)} articulos desde PSK Cloud API")
     return df
 
-def git_commit_and_push(carpeta, ok, fail, disc):
-    git_key = os.path.join(CARPETA_BASE, "github-key-nopass")
-    msg = f"update {os.path.basename(carpeta).replace('update_', '')}: {ok} OK, {fail} fail, {disc} disc"
-    repo_dir = CARPETA_BASE
-    env = os.environ.copy()
-    env["GIT_SSH_COMMAND"] = f'ssh -i "{git_key}" -o StrictHostKeyChecking=no'
-    try:
-        subprocess.run(["git", "add", carpeta], cwd=repo_dir, capture_output=True, env=env)
-        subprocess.run(["git", "commit", "-m", msg], cwd=repo_dir, capture_output=True, env=env)
-        r = subprocess.run(["git", "push", "origin", "master"], cwd=repo_dir, capture_output=True, timeout=30, env=env)
-        out = r.stdout.decode() + r.stderr.decode()
-        print(f"  GitHub: {out.splitlines()[-1] if out.splitlines() else 'ok'}")
-    except Exception as e:
-        print(f"  GitHub WARN: {e}")
-
 def main():
     dry_run = "--live" not in sys.argv
+    use_api = "--api" in sys.argv
     fecha_arg = None
     for i, a in enumerate(sys.argv):
         if a == "--fecha" and i+1 < len(sys.argv):
             fecha_arg = sys.argv[i+1]
             sys.argv.pop(i+1); sys.argv.pop(i)
             break
-
-    print("=== ACTUALIZACION DIARIA DE STOCK (SiteGround) ===")
+    if use_api:
+        for i, a in enumerate(sys.argv):
+            if a == "--api":
+                sys.argv.pop(i)
+                break
+    print("=== ACTUALIZACION DIARIA DE STOCK ===")
     print(f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n")
 
-    fec = datetime.strptime(fecha_arg, "%d-%m-%Y") if fecha_arg else datetime.now()
-    carpeta = os.path.join(CARPETA_BASE, f"update_{fec.strftime('%d-%m-%Y')}")
-    os.makedirs(carpeta, exist_ok=True)
+    inv_csv = os.path.join(CARPETA_BASE, "ListaInvFisic.csv")
 
-    df_inv = fetch_from_psk_api()
-    df_inv.to_csv(os.path.join(carpeta, "ListaInvFisic.csv"), index=False)
+    if use_api:
+        fec = datetime.strptime(fecha_arg, "%d-%m-%Y") if fecha_arg else datetime.now()
+        carpeta = os.path.join(CARPETA_BASE, f"update_{fec.strftime('%d-%m-%Y')}")
+        os.makedirs(carpeta, exist_ok=True)
+        df_inv = fetch_from_psk_api()
+        df_inv.to_csv(os.path.join(carpeta, "ListaInvFisic.csv"), index=False)
+    else:
+        if not os.path.exists(inv_csv):
+            print(f"ERROR: No se encuentra {inv_csv}")
+            print("Coloca el archivo ListaInvFisic.csv en la carpeta del proyecto.")
+            return
+        if fecha_arg:
+            fec = datetime.strptime(fecha_arg, "%d-%m-%Y")
+        else:
+            fec = datetime.fromtimestamp(os.path.getmtime(inv_csv))
+        carpeta = os.path.join(CARPETA_BASE, f"update_{fec.strftime('%d-%m-%Y')}")
+        os.makedirs(carpeta, exist_ok=True)
+        shutil.copy2(inv_csv, os.path.join(carpeta, "ListaInvFisic.csv"))
+        with open(inv_csv, "r", encoding="ISO-8859-1") as f:
+            delim = ";" if ";" in f.readline() else ","
+        df_inv = pd.read_csv(inv_csv, delimiter=delim, encoding="ISO-8859-1", dtype={"Codigo": str})
+        df_inv["Codigo"] = df_inv["Codigo"].str.strip()
 
-    wc_json = get_wc_export(suffix="_1")
+    wc_json = get_wc_export_via_ssh(suffix="_1")
     wc_path = os.path.join(carpeta, "wc_export.json")
     shutil.copy2(wc_json, wc_path)
 
@@ -113,6 +132,7 @@ def main():
     sku_wc = set(wc_by_sku.keys())
     coinciden = cod_inv & sku_wc
 
+    # === COMPARATIVA PREVIA ===
     rows_comp = []
     for sku in coinciden:
         wc_p = wc_by_sku[sku]
@@ -181,12 +201,12 @@ def main():
     df_prev = pd.DataFrame(updates)
     df_prev.to_csv(os.path.join(carpeta, "reporte_preview.csv"), index=False)
     print(f"\n{'='*70}")
-    print(f"  {'SIMULACION' if dry_run else 'ACTUALIZACION EN VIVO'}")
+    print(f"  {'SIMULACION' if dry_run else 'ACTUALIZACION EN VIVO (SSH)'}")
     print(f"  Total a procesar: {len(updates)} productos")
     print(f"  Coincidencias: {len(coinciden)} | Solo WC (low stock): {len(updates)-len(coinciden)}")
     print(f"{'='*70}")
 
-    needs_wp = []
+    commands = []
     for u in updates:
         diff = u["new_stock"] - u["old_stock"]
         signo = "+" if diff > 0 else ""
@@ -202,19 +222,20 @@ def main():
 
         in_stock = "true" if u["new_status"] == "instock" else "false"
         if u["tipo"] == "variation":
-            wp_cmd = f"wc product_variation update {u['parent']} {u['id']}"
+            wp_cmd = f"wp --user=Suplementos wc product_variation update {u['parent']} {u['id']}"
         else:
-            wp_cmd = f"wc product update {u['id']}"
+            wp_cmd = f"wp --user=Suplementos wc product update {u['id']}"
         wp_cmd += f" --stock_quantity={u['new_stock']} --in_stock={in_stock}"
         if not u["manage"] or u["manage"] == "parent":
             wp_cmd += " --manage_stock=true"
-        needs_wp.append(wp_cmd)
+        commands.append(f"cd {WP_PATH} && {wp_cmd}")
 
         if dry_run:
             print(f" -> {'outofstock' if u['new_stock'] <= STOCK_LIMIT else 'instock'} (dry)")
         else:
             print(" -> pendiente")
 
+    # CSV de cambios (solo productos con modificacion real)
     cambios_df = pd.DataFrame([u for u in updates if u["new_stock"] != u["old_stock"] or u["new_status"] != u["old_status"]])
     if not cambios_df.empty:
         cambios_df["tipo_cambio"] = cambios_df.apply(
@@ -228,25 +249,29 @@ def main():
     if dry_run:
         cambios = sum(1 for u in updates if u["new_stock"] != u["old_stock"])
         print(f"\n  Con cambio stock: {cambios}  Solo status: {len(updates)-cambios}")
-        print(f"  Comandos WP-CLI generados: {len(needs_wp)}")
+        print(f"  Comandos WP-CLI generados: {len(commands)}")
     else:
-        print(f"\n  Ejecutando {len(needs_wp)} comandos WP-CLI...")
+        print(f"\n  Ejecutando {len(commands)} comandos vía SSH...")
         ok = fail = 0
-        for i, cmd in enumerate(needs_wp, 1):
-            out = run_wp(cmd, timeout=60)
-            sys.stdout.write(f"\r  [{i}/{len(needs_wp)}] ")
+        batch_size = 20
+        for b in range(0, len(commands), batch_size):
+            batch = commands[b:b+batch_size]
+            batch_cmd = "; ".join(batch)
+            out = ssh_run(batch_cmd)
+            for i, cmd in enumerate(batch, b+1):
+                sys.stdout.write(f"\r  [{i}/{len(commands)}] ")
+                sys.stdout.flush()
+            succ = out.count("Success:")
+            errs = out.count("Error:")
+            ok += succ
+            fail += errs
+            sys.stdout.write(f"  OK: +{succ}  Err: +{errs}\n")
             sys.stdout.flush()
-            if out and "Success:" in out:
-                ok += 1
-            else:
-                fail += 1
-        sys.stdout.write("\n")
-        sys.stdout.flush()
 
         print(f"\n  OK: {ok}  Fallidos: {fail}")
 
         print("\n--- VERIFICACION ---", flush=True)
-        wc_json2 = get_wc_export(suffix="_2")
+        wc_json2 = get_wc_export_via_ssh(suffix="_2")
         with open(wc_json2, encoding='utf-8') as f:
             wc2 = json.load(f)
         wc2_by_sku = {}
@@ -289,6 +314,21 @@ def main():
 
     if not dry_run:
         git_commit_and_push(carpeta, ok, fail, disc)
+
+def git_commit_and_push(carpeta, ok, fail, disc):
+    git_key = os.path.join(CARPETA_BASE, "github-key-nopass")
+    msg = f"update {os.path.basename(carpeta).replace('update_', '')}: {ok} OK, {fail} fail, {disc} disc"
+    repo_dir = CARPETA_BASE
+    env = os.environ.copy()
+    env["GIT_SSH_COMMAND"] = f'ssh -i "{git_key}" -o StrictHostKeyChecking=no'
+    try:
+        subprocess.run(["git", "add", carpeta], cwd=repo_dir, capture_output=True, env=env)
+        subprocess.run(["git", "commit", "-m", msg], cwd=repo_dir, capture_output=True, env=env)
+        r = subprocess.run(["git", "push", "origin", "master"], cwd=repo_dir, capture_output=True, timeout=30, env=env)
+        out = r.stdout.decode() + r.stderr.decode()
+        print(f"  GitHub: {out.splitlines()[-1] if out.splitlines() else 'ok'}")
+    except Exception as e:
+        print(f"  GitHub WARN: {e}")
 
 if __name__ == "__main__":
     main()
